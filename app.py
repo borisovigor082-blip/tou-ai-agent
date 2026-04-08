@@ -5,14 +5,11 @@ import requests
 from PIL import Image
 from io import BytesIO
 
-# =========================================================
-# 1. КОНФИГУРАЦИЯ И СТИЛИЗАЦИЯ
-# =========================================================
+# --- КОНФИГУРАЦИЯ ---
 st.set_page_config(page_title="ToU AI Advisor", page_icon="🎓", layout="wide")
-
-# Получение API ключа из Secrets
 API_KEY = st.secrets.get("API_KEY", "")
 
+# --- СТИЛИ ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap');
@@ -42,66 +39,58 @@ with header_col2:
     st.markdown("<div class='main-title'>Виртуальный консультант Торайгыров Университета</div>", unsafe_allow_html=True)
     st.markdown("<div class='sub-title'>Интеллектуальная поддержка факультета Computer Science</div>", unsafe_allow_html=True)
 
-# =========================================================
-# 2. ПОЛЕ ПОИСКА (ИНТЕРФЕЙС НАВЕРХУ)
-# =========================================================
-prompt = st.text_input("Введите ваш вопрос:", placeholder="Например: как узнать задолженность по оплате?")
+# --- ИНИЦИАЛИЗАЦИЯ СОСТОЯНИЯ ---
+if "last_query" not in st.session_state:
+    st.session_state.last_query = ""
+if "last_answer" not in st.session_state:
+    st.session_state.last_answer = ""
 
-# =========================================================
-# 3. ЛОГИКА ИИ
-# =========================================================
+# --- ПОЛЕ ВВОДА ---
+query = st.text_input("Введите ваш вопрос:", placeholder="Например: кто декан факультета?")
+
+# --- ЛОГИКА ---
 if API_KEY:
     try:
         genai.configure(api_key=API_KEY)
-
-        # Загрузка базы знаний
+        
         if os.path.exists("knowledge.txt"):
             with open("knowledge.txt", "r", encoding="utf-8") as f:
                 kb_content = f.read()
         else:
-            st.error("Файл knowledge.txt не найден!")
+            st.error("knowledge.txt не найден")
             st.stop()
 
-        # Автоподбор модели (защита от 404)
         @st.cache_resource
-        def get_model():
-            try:
-                available = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                target_models = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
-                for target in target_models:
-                    for real_name in available:
-                        if target in real_name:
-                            return genai.GenerativeModel(
-                                model_name=real_name,
-                                system_instruction=f"Ты — консультант ToU. Отвечай кратко на основе этого текста: {kb_content}"
-                            )
-                return genai.GenerativeModel(available[0]) if available else None
-            except:
-                return None
+        def load_model(context):
+            # Используем последнюю стабильную версию
+            return genai.GenerativeModel(
+                model_name='gemini-1.5-flash',
+                system_instruction=f"Ты — консультант ToU. Отвечай только по делу, используя эти данные: {context}"
+            )
 
-        model = get_model()
+        model = load_model(kb_content)
 
-        if prompt and model:
-            with st.spinner('Поиск информации...'):
+        # Если ввели новый вопрос, которого не было в прошлый раз
+        if query and query != st.session_state.last_query:
+            with st.spinner('Сверяюсь с базой знаний...'):
                 try:
-                    # Генерация ответа
-                    response = model.generate_content(prompt)
-                    
-                    st.markdown("### Ответ консультанта:")
-                    st.markdown(f"<div class='answer-box'>{response.text}</div>", unsafe_allow_html=True)
-                    
+                    response = model.generate_content(query)
+                    st.session_state.last_answer = response.text
+                    st.session_state.last_query = query
                 except Exception as e:
                     if "429" in str(e):
-                        st.error("⚠️ Превышен лимит запросов. Пожалуйста, подождите 30 секунд.")
+                        st.error("⚠️ Лимит запросов. Подождите 15 секунд.")
                     else:
-                        st.error(f"Ошибка API: {e}")
-        elif not model:
-            st.error("Доступные модели не найдены.")
+                        st.error(f"Ошибка: {e}")
+
+        # Вывод ответа, если он есть в памяти
+        if st.session_state.last_answer:
+            st.markdown("### Ответ:")
+            st.markdown(f"<div class='answer-box'>{st.session_state.last_answer}</div>", unsafe_allow_html=True)
 
     except Exception as e:
-        st.error(f"Ошибка: {e}")
+        st.error(f"Критическая ошибка: {e}")
 else:
     st.warning("⚠️ Добавьте API_KEY в Secrets.")
 
-# --- ПОДВАЛ ---
 st.markdown("<div class='footer'>© 2026 ToU. Разработано в рамках учебной практики.</div>", unsafe_allow_html=True)
