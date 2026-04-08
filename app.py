@@ -4,18 +4,15 @@ import os
 import requests
 from PIL import Image
 from io import BytesIO
+import time
 
 # =========================================================
-# 1. КОНФИГУРАЦИЯ БЕЗОПАСНОСТИ (SECRETS)
+# 1. КОНФИГУРАЦИЯ И СТИЛИЗАЦИЯ
 # =========================================================
-if "API_KEY" in st.secrets:
-    API_KEY = st.secrets["API_KEY"]
-else:
-    # Оставь пустую строку, если ключ в Secrets уже вставлен
-    API_KEY = ""
-
-# --- СТИЛИЗАЦИЯ ---
 st.set_page_config(page_title="ToU AI Advisor", page_icon="🎓", layout="wide")
+
+# Инициализация ключа из Secrets или напрямую
+API_KEY = st.secrets.get("API_KEY", "")
 
 st.markdown("""
     <style>
@@ -27,15 +24,11 @@ st.markdown("""
     }
     .main-title { color: #0055A4; font-size: 2.2rem; font-weight: 700; border-bottom: 2px solid #FFCC00; padding-bottom: 10px; }
     .sub-title { color: #666; font-size: 1.1rem; margin-bottom: 25px; }
-    [data-testid="stChatMessage"] {
-        background-color: white; border-radius: 10px; border: 1px solid #e0e6ed;
-        box-shadow: 0 2px 5px rgba(0,85,164,0.05); margin-bottom: 15px;
-    }
     .footer { text-align: center; color: #888; font-size: 0.8rem; margin-top: 50px; border-top: 1px solid #eee; padding-top: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. ШАПКА ---
+# --- ШАПКА ---
 header_col1, header_col2 = st.columns([1, 4])
 with header_col1:
     try:
@@ -49,58 +42,71 @@ with header_col2:
     st.markdown("<div class='main-title'>Виртуальный консультант Торайгыров Университета</div>", unsafe_allow_html=True)
     st.markdown("<div class='sub-title'>Интеллектуальная поддержка факультета Computer Science</div>", unsafe_allow_html=True)
 
-# --- 3. ЛОГИКА ИИ С АВТОПОДБОРОМ МОДЕЛИ ---
-if API_KEY and API_KEY != "ВСТАВЬ_СВОЙ_КЛЮЧ_ДЛЯ_ЛОКАЛЬНОГО_ТЕСТА":
+# =========================================================
+# 2. ЛОГИКА РАБОТЫ С БАЗОЙ ЗНАНИЙ И МОДЕЛЬЮ
+# =========================================================
+
+if API_KEY:
     try:
         genai.configure(api_key=API_KEY)
-        
-        # ЭТА ЧАСТЬ ИСПРАВЛЯЕТ ОШИБКУ 404
-        @st.cache_resource
-        def get_working_model():
-            available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            # Ищем сначала 1.5-flash, так как она самая быстрая
-            for m_name in available_models:
-                if 'gemini-1.5-flash' in m_name:
-                    return genai.GenerativeModel(m_name)
-            # Если не нашли, берем любую первую доступную из списка
-            if available_models:
-                return genai.GenerativeModel(available_models[0])
-            return None
 
-        model = get_working_model()
-
-        if model:
-            if os.path.exists("knowledge.txt"):
-                with open("knowledge.txt", "r", encoding="utf-8") as f:
-                    kb_content = f.read()
-            else:
-                st.error("Файл knowledge.txt не найден!")
-                st.stop()
-
-            if "messages" not in st.session_state:
-                st.session_state.messages = []
-
-            for message in st.session_state.messages:
-                with st.chat_message(message["role"]):
-                    st.markdown(message["content"])
-
-            if prompt := st.chat_input("Спросите что-нибудь о ToU..."):
-                st.session_state.messages.append({"role": "user", "content": prompt})
-                with st.chat_message("user"):
-                    st.markdown(prompt)
-
-                with st.chat_message("assistant"):
-                    full_prompt = f"Контекст: {kb_content}\n\nВопрос: {prompt}\nОтвечай кратко и вежливо."
-                    response = model.generate_content(full_prompt)
-                    st.markdown(response.text)
-                    st.session_state.messages.append({"role": "assistant", "content": response.text})
+        # Загрузка базы знаний
+        if os.path.exists("knowledge.txt"):
+            with open("knowledge.txt", "r", encoding="utf-8") as f:
+                kb_content = f.read()
         else:
-            st.error("На вашем аккаунте не найдено доступных моделей Gemini.")
+            st.error("Файл knowledge.txt не найден! Создайте его в корневой папке.")
+            st.stop()
+
+        # Инициализация модели с системной инструкцией (экономит квоту)
+        @st.cache_resource
+        def load_model():
+            return genai.GenerativeModel(
+                model_name='gemini-1.5-flash',
+                system_instruction=f"Ты — официальный ИИ-консультант ToU. Отвечай кратко, используя этот контекст: {kb_content}. Если вопроса нет в контексте, вежливо скажи, что не владеешь этой информацией и предложи обратиться в деканат."
+            )
+
+        model = load_model()
+
+        # Работа с историей чата
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
+
+        # Отображение истории
+        for message in st.session_state.messages:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+        # Поле ввода
+        if prompt := st.chat_input("Напишите ваш вопрос (например: где узнать об оплате?)..."):
+            # Добавляем вопрос пользователя в чат
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+
+            # Генерация ответа
+            with st.chat_message("assistant"):
+                message_placeholder = st.empty()
+                try:
+                    # Сама генерация
+                    response = model.generate_content(prompt)
+                    full_response = response.text
+                    message_placeholder.markdown(full_response)
+                    
+                    # Сохраняем ответ
+                    st.session_state.messages.append({"role": "assistant", "content": full_response})
+                
+                except Exception as e:
+                    error_msg = str(e)
+                    if "429" in error_msg:
+                        st.error("⚠️ Превышен лимит запросов. Подождите 30-60 секунд.")
+                    else:
+                        st.error(f"Произошла ошибка: {error_msg}")
 
     except Exception as e:
-        st.error(f"Произошла ошибка API: {e}")
+        st.error(f"Ошибка конфигурации: {e}")
 else:
-    st.warning("⚠️ Система ожидает API Ключ. Добавьте его в Secrets (API_KEY) или в код.")
+    st.warning("⚠️ API_KEY не найден. Пожалуйста, добавьте его в настройки (Secrets).")
 
-# --- 4. ПОДВАЛ ---
+# --- ПОДВАЛ ---
 st.markdown("<div class='footer'>© 2026 ToU. Разработано в рамках учебной практики.</div>", unsafe_allow_html=True)
