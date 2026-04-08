@@ -7,11 +7,11 @@ from io import BytesIO
 import time
 
 # =========================================================
-# 1. КОНФИГУРАЦИЯ И СТИЛИЗАЦИЯ
+# 1. НАСТРОЙКА СТРАНИЦЫ И СТИЛЕЙ
 # =========================================================
 st.set_page_config(page_title="ToU AI Advisor", page_icon="🎓", layout="wide")
 
-# Инициализация ключа из Secrets или напрямую
+# Получение API ключа
 API_KEY = st.secrets.get("API_KEY", "")
 
 st.markdown("""
@@ -28,7 +28,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- ШАПКА ---
+# --- ВЕРХНЯЯ ПАНЕЛЬ (ЛОГО И ЗАГОЛОВОК) ---
 header_col1, header_col2 = st.columns([1, 4])
 with header_col1:
     try:
@@ -43,70 +43,4 @@ with header_col2:
     st.markdown("<div class='sub-title'>Интеллектуальная поддержка факультета Computer Science</div>", unsafe_allow_html=True)
 
 # =========================================================
-# 2. ЛОГИКА РАБОТЫ С БАЗОЙ ЗНАНИЙ И МОДЕЛЬЮ
-# =========================================================
-
-if API_KEY:
-    try:
-        genai.configure(api_key=API_KEY)
-
-        # Загрузка базы знаний
-        if os.path.exists("knowledge.txt"):
-            with open("knowledge.txt", "r", encoding="utf-8") as f:
-                kb_content = f.read()
-        else:
-            st.error("Файл knowledge.txt не найден! Создайте его в корневой папке.")
-            st.stop()
-
-        # Инициализация модели с системной инструкцией (экономит квоту)
-        @st.cache_resource
-        def load_model():
-            return genai.GenerativeModel(
-                model_name='gemini-1.5-flash',
-                system_instruction=f"Ты — официальный ИИ-консультант ToU. Отвечай кратко, используя этот контекст: {kb_content}. Если вопроса нет в контексте, вежливо скажи, что не владеешь этой информацией и предложи обратиться в деканат."
-            )
-
-        model = load_model()
-
-        # Работа с историей чата
-        if "messages" not in st.session_state:
-            st.session_state.messages = []
-
-        # Отображение истории
-        for message in st.session_state.messages:
-            with st.chat_message(message["role"]):
-                st.markdown(message["content"])
-
-        # Поле ввода
-        if prompt := st.chat_input("Напишите ваш вопрос (например: где узнать об оплате?)..."):
-            # Добавляем вопрос пользователя в чат
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            with st.chat_message("user"):
-                st.markdown(prompt)
-
-            # Генерация ответа
-            with st.chat_message("assistant"):
-                message_placeholder = st.empty()
-                try:
-                    # Сама генерация
-                    response = model.generate_content(prompt)
-                    full_response = response.text
-                    message_placeholder.markdown(full_response)
-                    
-                    # Сохраняем ответ
-                    st.session_state.messages.append({"role": "assistant", "content": full_response})
-                
-                except Exception as e:
-                    error_msg = str(e)
-                    if "429" in error_msg:
-                        st.error("⚠️ Превышен лимит запросов. Подождите 30-60 секунд.")
-                    else:
-                        st.error(f"Произошла ошибка: {error_msg}")
-
-    except Exception as e:
-        st.error(f"Ошибка конфигурации: {e}")
-else:
-    st.warning("⚠️ API_KEY не найден. Пожалуйста, добавьте его в настройки (Secrets).")
-
-# --- ПОДВАЛ ---
-st.markdown("<div class='footer'>© 2026 ToU. Разработано в рамках учебной практики.</div>", unsafe_allow_html=True)
+# 2. Я
