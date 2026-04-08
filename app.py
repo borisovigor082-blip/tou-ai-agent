@@ -1,114 +1,54 @@
 import streamlit as st
 import google.generativeai as genai
 import os
-import requests
-from PIL import Image
-from io import BytesIO
+import time
 
-# --- 1. НАСТРОЙКИ СТРАНИЦЫ ---
-st.set_page_config(page_title="ToU AI Advisor", page_icon="🎓", layout="wide")
+# Настройки
+st.set_page_config(page_title="ToU AI Advisor", layout="wide")
 API_KEY = st.secrets.get("API_KEY", "")
 
-st.markdown("""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap');
-    html, body, [class*="css"] { font-family: 'Roboto', sans-serif; background-color: #fcfcfc; }
-    .stApp::before {
-        content: ""; position: fixed; top: 0; left: 0; width: 100%; height: 10px;
-        background: linear-gradient(90deg, #0055A4 0%, #007FFF 50%, #FFCC00 100%); z-index: 9999;
-    }
-    .main-title { color: #0055A4; font-size: 2.2rem; font-weight: 700; border-bottom: 2px solid #FFCC00; padding-bottom: 10px; }
-    .answer-box { background-color: white; padding: 20px; border-radius: 10px; border: 1px solid #e0e6ed; box-shadow: 0 2px 5px rgba(0,85,164,0.05); }
-    .footer { text-align: center; color: #888; font-size: 0.8rem; margin-top: 50px; border-top: 1px solid #eee; padding-top: 20px; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# --- 2. ШАПКА ---
-header_col1, header_col2 = st.columns([1, 4])
-with header_col1:
-    try:
-        response = requests.get("https://tou.edu.kz/images/logo_tou_ru.png", timeout=5)
-        img = Image.open(BytesIO(response.content))
-        st.image(img, width=180)
-    except:
-        st.markdown("<h2 style='color:#0055A4;'>ToU</h2>", unsafe_allow_html=True)
-
-with header_col2:
-    st.markdown("<div class='main-title'>Виртуальный консультант Торайгыров Университета</div>", unsafe_allow_html=True)
-    st.markdown("<div style='color: #666; margin-bottom: 20px;'>Интеллектуальная поддержка факультета Computer Science</div>", unsafe_allow_html=True)
-
-# --- 3. ИНИЦИАЛИЗАЦИЯ И ПОИСК МОДЕЛИ ---
-if "last_answer" not in st.session_state:
-    st.session_state.last_answer = ""
-if "last_query" not in st.session_state:
-    st.session_state.last_query = ""
-
-query = st.text_input("Введите ваш вопрос:", placeholder="Например: какие документы нужны для поступления?")
+# Центрированный заголовок
+st.markdown("<h1 style='text-align: center; color: #0055A4;'>ToU AI Advisor</h1>", unsafe_allow_html=True)
 
 if API_KEY:
     try:
         genai.configure(api_key=API_KEY)
-
-        # Загрузка базы знаний
+        
+        # Читаем базу
         if os.path.exists("knowledge.txt"):
             with open("knowledge.txt", "r", encoding="utf-8") as f:
-                kb_content = f.read()
+                context = f.read()
         else:
-            st.error("Файл knowledge.txt не найден!")
-            st.stop()
+            context = "Информация об университете ToU."
 
-        # УМНЫЙ ПОДБОР МОДЕЛИ (Решает ошибку 404)
-        @st.cache_resource
-        def get_available_model(context):
-            try:
-                # Получаем список всех доступных моделей для этого ключа
-                models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                
-                # Ищем самую подходящую (Flash 1.5, затем Pro, затем остальные)
-                best_model = None
-                for name in models:
-                    if 'gemini-1.5-flash' in name:
-                        best_model = name
-                        break
-                if not best_model:
-                    for name in models:
-                        if 'gemini-pro' in name or 'gemini-1.5-pro' in name:
-                            best_model = name
-                            break
-                
-                target = best_model if best_model else models[0]
-                return genai.GenerativeModel(
-                    model_name=target,
-                    system_instruction=f"Ты — консультант ToU. Отвечай кратко на основе этого текста: {context}"
-                )
-            except Exception as e:
-                st.error(f"Не удалось найти рабочую модель: {e}")
-                return None
+        # Форма поиска — КРИТИЧНО для борьбы с 429
+        with st.form(key='search_form'):
+            user_input = st.text_input("Введите ваш вопрос:")
+            submit = st.form_submit_button("Найти ответ")
 
-        model = get_available_model(kb_content)
+        if submit and user_input:
+            # Ищем модель динамически
+            models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            model_name = next((m for m in models if '1.5-flash' in m), models[0])
+            
+            model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=f"Ты помощник ToU. Отвечай кратко по тексту: {context}"
+            )
 
-        if query and query != st.session_state.last_query:
-            if model:
-                with st.spinner('Ищу ответ в базе знаний...'):
-                    try:
-                        response = model.generate_content(query)
-                        st.session_state.last_answer = response.text
-                        st.session_state.last_query = query
-                    except Exception as e:
-                        if "429" in str(e):
-                            st.error("⚠️ Слишком много запросов. Подождите 15 секунд.")
-                        else:
-                            st.error(f"Ошибка при генерации: {e}")
-            else:
-                st.error("Модели Gemini временно недоступны.")
-
-        if st.session_state.last_answer:
-            st.markdown("### Ответ:")
-            st.markdown(f"<div class='answer-box'>{st.session_state.last_answer}</div>", unsafe_allow_html=True)
+            with st.spinner("Запрос к ИИ..."):
+                try:
+                    # Самый важный фикс: если упало, просто выводим текст, а не вешаем сайт
+                    res = model.generate_content(user_input)
+                    st.success("Ответ найден:")
+                    st.write(res.text)
+                except Exception as e:
+                    if "429" in str(e):
+                        st.warning("⚠️ Лимит запросов. Просто подождите ровно 1 минуту, не нажимая кнопку.")
+                    else:
+                        st.error(f"Ошибка: {e}")
 
     except Exception as e:
         st.error(f"Ошибка инициализации: {e}")
 else:
-    st.warning("⚠️ Пожалуйста, добавьте API_KEY в настройки (Secrets).")
-
-st.markdown("<div class='footer'>© 2026 ToU. Разработано в рамках учебной практики.</div>", unsafe_allow_html=True)
+    st.info("Добавьте API_KEY в настройки Secrets.")
